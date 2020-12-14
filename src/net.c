@@ -115,6 +115,38 @@ timeout_connect(int s, const struct sockaddr *name, socklen_t namelen,
 	return (ret);
 }
 
+int
+timeout_read(int s, char *buf, size_t len, int timeout)
+{
+    struct pollfd pfd;
+    socklen_t optlen;
+    int flags, optval;
+    int ret;
+
+    flags = 0;
+    if (timeout != -1) {
+        flags = fcntl(s, F_GETFL, 0);
+        if (fcntl(s, F_SETFL, flags | O_NONBLOCK) == -1)
+            return -1;
+    }
+    pfd.fd = s;
+    pfd.events = POLLIN;
+    if ((ret = poll(&pfd, 1, timeout)) == 1) {
+        ret = recv(s, buf, len, 0);
+    } else if (ret == 0) {
+         errno = ETIMEDOUT;
+         ret = -1;
+    } else {
+        ret = -1;
+    }
+
+    if (timeout != -1 && fcntl(s, F_SETFL, flags) == -1)
+        ret = -1;
+
+    return ret;
+}
+
+
 /* netdial and netannouce code comes from libtask: http://swtch.com/libtask/
  * Copyright: http://swtch.com/libtask/COPYRIGHT
 */

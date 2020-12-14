@@ -77,6 +77,7 @@
 #include "iperf_api.h"
 #include "iperf_udp.h"
 #include "iperf_tcp.h"
+#include "iperf_rutp.h"
 #if defined(HAVE_SCTP_H)
 #include "iperf_sctp.h"
 #endif /* HAVE_SCTP_H */
@@ -882,9 +883,10 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
         {"server", no_argument, NULL, 's'},
         {"client", required_argument, NULL, 'c'},
         {"udp", no_argument, NULL, 'u'},
+        {"rutp-server", required_argument, NULL, OPT_RUTP_PROXY},
         {"bitrate", required_argument, NULL, 'b'},
         {"bandwidth", required_argument, NULL, 'b'},
-	{"server-bitrate-limit", required_argument, NULL, OPT_SERVER_BITRATE_LIMIT},
+	    {"server-bitrate-limit", required_argument, NULL, OPT_SERVER_BITRATE_LIMIT},
         {"time", required_argument, NULL, 't'},
         {"bytes", required_argument, NULL, 'n'},
         {"blockcount", required_argument, NULL, 'k'},
@@ -901,7 +903,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
         {"version6", no_argument, NULL, '6'},
         {"tos", required_argument, NULL, 'S'},
         {"dscp", required_argument, NULL, OPT_DSCP},
-	{"extra-data", required_argument, NULL, OPT_EXTRA_DATA},
+	    {"extra-data", required_argument, NULL, OPT_EXTRA_DATA},
 #if defined(HAVE_FLOWLABEL)
         {"flowlabel", required_argument, NULL, 'L'},
 #endif /* HAVE_FLOWLABEL */
@@ -948,6 +950,9 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
     int blksize;
     int server_flag, client_flag, rate_flag, duration_flag;
     char *endptr;
+    char *end, *start;
+    char server_addr[INET6_ADDRSTRLEN]; 
+    int port;
 #if defined(HAVE_CPU_AFFINITY)
     char* comma;
 #endif /* HAVE_CPU_AFFINITY */
@@ -1047,6 +1052,60 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
                 i_errno = IEUNIMP;
                 return -1;
 #endif /* HAVE_SCTP_H */
+            case OPT_RUTP_PROXY:
+                set_protocol(test, Prutp);
+                memset(server_addr, 0, sizeof(server_addr));
+                end = strstr(optarg, "]:");
+                if (end) {
+                    port = atoi(end + 2);
+                    if (port < 0 || port > 65535) {
+                        printf("the rutp-server port is error.\n");
+                    }
+                    if (!(start = strstr(optarg, "["))) {
+                        printf("the rutp-server address is error.\n");
+                        usage_long(stdout);
+                        exit(0);
+                    }
+                    if (end - (char *)start > sizeof(server_addr)) {
+                        strncpy(server_addr, start + 1, sizeof(server_addr) - 1);
+                    } else {
+                        strncpy(server_addr, start + 1, end - start - 1);
+                    }
+                    if (!inet_pton(AF_INET6, server_addr, 
+                            &((struct sockaddr_in6 *)&test->rutp_server)->sin6_addr)) {
+                        printf("the rutp-server v6 address is error.\n");
+                        exit(0);
+                    }
+                    ((struct sockaddr_in6 *)&test->rutp_server)->sin6_port = htons(port);
+                    test->rutp_server.sa_family = AF_INET6;
+                } else {
+                    end = strstr(optarg, ":");
+                    if (end) {
+                        port = atoi(end + 1);
+                        if (port < 0 || port > 65535) {
+                            printf("the rutp-server port is error.");
+                        }
+                    } else {
+                        printf("the rutp-server option is error.\n");
+                        usage_long(stdout);
+                        exit(0);
+                    }
+                    if (end - (char *)optarg > sizeof(server_addr) - 1) {
+                        strncpy(server_addr, optarg, sizeof(server_addr) - 1);
+                    } else {
+                        strncpy(server_addr, optarg, end - (char *)optarg);
+                    }
+                    if (!inet_pton(AF_INET, server_addr, 
+                            &((struct sockaddr_in *)&test->rutp_server)->sin_addr)) {
+                        printf("the rutp-server v4 address is error.\n");
+                        exit(0);
+                    }
+                    ((struct sockaddr_in *)&test->rutp_server)->sin_port = htons(port);
+                    test->rutp_server.sa_family = AF_INET;
+                }
+                
+                client_flag = 1;
+                break;
 
             case OPT_NUMSTREAMS:
 #if defined(linux) || defined(__FreeBSD__)
@@ -1879,6 +1938,8 @@ send_parameters(struct iperf_test *test)
 	    cJSON_AddTrueToObject(j, "udp");
         else if (test->protocol->id == Psctp)
             cJSON_AddTrueToObject(j, "sctp");
+    else if (test->protocol->id)
+        cJSON_AddTrueToObject(j, "rutp");
 	cJSON_AddNumberToObject(j, "omit", test->omit);
 	if (test->server_affinity != -1)
 	    cJSON_AddNumberToObject(j, "server_affinity", test->server_affinity);
@@ -1984,6 +2045,8 @@ get_parameters(struct iperf_test *test)
 	    set_protocol(test, Pudp);
         if ((j_p = cJSON_GetObjectItem(j, "sctp")) != NULL)
             set_protocol(test, Psctp);
+    if ((j_p = cJSON_GetObjectItem(j, "rutp")) != NULL)
+	    set_protocol(test, Prutp);
 	if ((j_p = cJSON_GetObjectItem(j, "omit")) != NULL)
 	    test->omit = j_p->valueint;
 	if ((j_p = cJSON_GetObjectItem(j, "server_affinity")) != NULL)
@@ -2499,7 +2562,7 @@ protocol_free(struct protocol *proto)
 int
 iperf_defaults(struct iperf_test *testp)
 {
-    struct protocol *tcp, *udp;
+    struct protocol *tcp, *udp, *rutp;
 #if defined(HAVE_SCTP_H)
     struct protocol *sctp;
 #endif /* HAVE_SCTP_H */
@@ -2572,6 +2635,24 @@ iperf_defaults(struct iperf_test *testp)
         return -1;
     }
 
+    rutp = protocol_new();
+    if (!rutp) {
+        protocol_free(tcp);
+        protocol_free(rutp);
+        protocol_free(udp);
+
+        return -1;
+    }
+    rutp->id = Prutp;
+    rutp->name = "RUTP-PROXY";
+    rutp->accept = iperf_rutp_accept;
+    rutp->listen = iperf_rutp_listen;
+    rutp->connect = iperf_rutp_connect;
+    rutp->send = iperf_rutp_send;
+    rutp->recv = iperf_rutp_recv;
+    rutp->init = iperf_rutp_init;
+    SLIST_INSERT_AFTER(tcp, rutp, protocols);
+
     udp->id = Pudp;
     udp->name = "UDP";
     udp->accept = iperf_udp_accept;
@@ -2580,7 +2661,7 @@ iperf_defaults(struct iperf_test *testp)
     udp->send = iperf_udp_send;
     udp->recv = iperf_udp_recv;
     udp->init = iperf_udp_init;
-    SLIST_INSERT_AFTER(tcp, udp, protocols);
+    SLIST_INSERT_AFTER(rutp, udp, protocols);
 
     set_protocol(testp, Ptcp);
 

@@ -53,6 +53,8 @@ typedef uint64_t iperf_size_t;
 #define Ptcp SOCK_STREAM
 #define Pudp SOCK_DGRAM
 #define Psctp 12
+#define Prutp 13
+#define DEFAULT_RUTP_BLKSIZE 1410
 #define DEFAULT_UDP_BLKSIZE 1460 /* default is dynamically set, else this */
 #define DEFAULT_TCP_BLKSIZE (128 * 1024)  /* default read/write block size */
 #define DEFAULT_SCTP_BLKSIZE (64 * 1024)
@@ -80,6 +82,7 @@ typedef uint64_t iperf_size_t;
 #define OPT_SERVER_BITRATE_LIMIT 21
 #define OPT_TIMESTAMPS 22
 #define OPT_SERVER_SKEW_THRESHOLD 23
+#define OPT_RUTP_PROXY 24
 
 /* states */
 #define TEST_START 1

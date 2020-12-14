@@ -28,6 +28,7 @@
 #define __NET_H
 
 int timeout_connect(int s, const struct sockaddr *name, socklen_t namelen, int timeout);
+int timeout_read(int s, char *buf, size_t len, int timeout);
 int netdial(int domain, int proto, const char *local, int local_port, const char *server, int port, int timeout);
 int netannounce(int domain, int proto, const char *local, int port);
 int Nread(int fd, char *buf, size_t count, int prot);

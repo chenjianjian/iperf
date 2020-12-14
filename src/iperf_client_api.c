@@ -328,6 +328,14 @@ iperf_handle_message_client(struct iperf_test *test)
 int
 iperf_connect(struct iperf_test *test)
 {
+    int opt;
+    socklen_t len;
+    char *ptr;
+    int port;
+    int err_code;
+    char buf[4096];
+    char server_addr[INET6_ADDRSTRLEN]; 
+    
     FD_ZERO(&test->read_set);
     FD_ZERO(&test->write_set);
 
@@ -349,6 +357,62 @@ iperf_connect(struct iperf_test *test)
         return -1;
     }
 
+    if (test->protocol->id == Prutp) {
+        memset(buf, 0, sizeof(buf));
+        memset(server_addr, 0, sizeof(server_addr));
+        if (test->rutp_server.sa_family == AF_INET) {
+            inet_ntop(test->rutp_server.sa_family, 
+                &((struct sockaddr_in *)&test->rutp_server)->sin_addr, 
+                server_addr, sizeof(server_addr));
+            port = ntohs(((struct sockaddr_in *)&test->rutp_server)->sin_port);
+        } else if (test->rutp_server.sa_family == AF_INET6) {
+            inet_ntop(test->rutp_server.sa_family, 
+                &((struct sockaddr_in6 *)&test->rutp_server)->sin6_addr, 
+                server_addr, sizeof(server_addr));
+            port = ntohs(((struct sockaddr_in6 *)&test->rutp_server)->sin6_port);
+        } else {
+            printf("%s:%d the rutp server address is error.\n", __func__, __LINE__);
+            i_errno = IEMESSAGE;
+            return -1;
+        }
+        len = snprintf(buf, sizeof(buf), "CONNECT %s:%i HTTP/1.0\r\n"
+                                   "Proxy-Connection: keep-alive\r\n"
+                                   "Proxy-Authorization: Basic dGVzdDoxMjM0NTY=\r\n"
+                                   "User-Agent: iperf 3\r\n\r\n", 
+                                   server_addr, port);
+        if (send(test->ctrl_sck, buf, len, 0) < len) {
+            printf("%s:%d send http proxy message failed.\n", __func__, __LINE__);
+            i_errno = IECTRLWRITE;
+            return -1;
+        } else {
+            memset(buf, 0, sizeof(buf));
+            len = timeout_read(test->ctrl_sck, buf, (size_t)sizeof(buf), 10000);
+            if (len <= 0) {
+                printf("%s:%d recv http proxy message failed.\n", __func__, __LINE__);
+                i_errno = IECTRLREAD;
+                return -1;
+            } else {
+                ptr = buf + 7;
+                if (strncmp(buf, "HTTP/1.", 7) != 0 || (*ptr != '0' && *ptr != '1')) {
+                    printf("%s:%d recv the unknow message.\n", __func__, __LINE__);
+                    i_errno = IEMESSAGE;
+                    return -1;
+                }
+                ptr++;
+                while (*ptr == ' ') {
+                    ptr++;
+                }
+                err_code = atoi (ptr);
+                if (err_code != 200) {
+                    printf("%s:%d the http respone code(%d) is error.\n", 
+                        __func__, __LINE__, err_code);
+                    i_errno = IEMESSAGE;
+                    return -1;
+                }
+            }
+        }
+    }
+
     if (Nwrite(test->ctrl_sck, test->cookie, COOKIE_SIZE, Ptcp) < 0) {
         i_errno = IESENDCOOKIE;
         return -1;
@@ -356,10 +420,6 @@ iperf_connect(struct iperf_test *test)
 
     FD_SET(test->ctrl_sck, &test->read_set);
     if (test->ctrl_sck > test->max_fd) test->max_fd = test->ctrl_sck;
-
-    int opt;
-    socklen_t len;
-
     len = sizeof(opt);
     if (getsockopt(test->ctrl_sck, IPPROTO_TCP, TCP_MAXSEG, &opt, &len) < 0) {
         test->ctrl_sck_mss = 0;
@@ -398,29 +458,34 @@ iperf_connect(struct iperf_test *test)
      * the user always has the option to override.
      */
     if (test->protocol->id == Pudp) {
-	if (test->settings->blksize == 0) {
-	    if (test->ctrl_sck_mss) {
-		test->settings->blksize = test->ctrl_sck_mss;
-	    }
-	    else {
-		test->settings->blksize = DEFAULT_UDP_BLKSIZE;
-	    }
-	    if (test->verbose) {
-		printf("Setting UDP block size to %d\n", test->settings->blksize);
-	    }
-	}
+    	if (test->settings->blksize == 0) {
+    	    if (test->ctrl_sck_mss) {
+    		test->settings->blksize = test->ctrl_sck_mss;
+    	    }
+    	    else {
+    		test->settings->blksize = DEFAULT_UDP_BLKSIZE;
+    	    }
+    	    if (test->verbose) {
+    		    printf("Setting UDP block size to %d\n", test->settings->blksize);
+    	    }
+    	}
 
-	/*
-	 * Regardless of whether explicitly or implicitly set, if the
-	 * block size is larger than the MSS, print a warning.
-	 */
-	if (test->ctrl_sck_mss > 0 &&
-	    test->settings->blksize > test->ctrl_sck_mss) {
-	    char str[128];
-	    snprintf(str, sizeof(str),
-		     "UDP block size %d exceeds TCP MSS %d, may result in fragmentation / drops", test->settings->blksize, test->ctrl_sck_mss);
-	    warning(str);
-	}
+    	/*
+    	 * Regardless of whether explicitly or implicitly set, if the
+    	 * block size is larger than the MSS, print a warning.
+    	 */
+    	if (test->ctrl_sck_mss > 0 &&
+    	    test->settings->blksize > test->ctrl_sck_mss) {
+    	    char str[128];
+    	    snprintf(str, sizeof(str),
+    		     "UDP block size %d exceeds TCP MSS %d, may result in fragmentation / drops", test->settings->blksize, test->ctrl_sck_mss);
+    	    warning(str);
+    	}
+    } else if (test->protocol->id == Prutp) {
+        test->settings->blksize = DEFAULT_RUTP_BLKSIZE;
+        if (test->verbose) {
+            printf("Setting RUTP block size to %d\n", test->settings->blksize);
+        }
     }
 
     return 0;
@@ -517,7 +582,7 @@ iperf_run_client(struct iperf_test * test)
 	        startup = 0;
 
 		// Set non-blocking for non-UDP tests
-		if (test->protocol->id != Pudp) {
+		if (test->protocol->id != Pudp && test->protocol->id != Prutp) {
 		    SLIST_FOREACH(sp, &test->streams, streams) {
 			setnonblocking(sp->socket, 1);
 		    }
@@ -562,7 +627,7 @@ iperf_run_client(struct iperf_test * test)
 						  test->blocks_received >= test->settings->blocks)))) {
 
 		// Unset non-blocking for non-UDP tests
-		if (test->protocol->id != Pudp) {
+		if (test->protocol->id != Pudp && test->protocol->id != Prutp) {
 		    SLIST_FOREACH(sp, &test->streams, streams) {
 			setnonblocking(sp->socket, 0);
 		    }

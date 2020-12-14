@@ -255,6 +255,7 @@ struct iperf_test
     struct protocol *protocol;
     signed char state;
     char     *server_hostname;                  /* -c option */
+    struct sockaddr rutp_server;                /* --rutp-server option */
     char     *tmp_template;
     char     *bind_address;                     /* first -B option */
     TAILQ_HEAD(xbind_addrhead, xbind_entry) xbind_addrs; /* all -X opts */
@@ -396,7 +397,7 @@ struct iperf_test
 #define MAX_TIME 86400
 #define MAX_BURST 1000
 #define MAX_MSS (9 * 1024)
-#define MAX_STREAMS 128
+#define MAX_STREAMS 1000
 
 #define TIMESTAMP_FORMAT "%c "
 
